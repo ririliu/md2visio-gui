@@ -165,14 +165,6 @@ namespace md2visio.vsdx
                 .ToList();
             double currentRootCross = 0;
 
-            void PlaceRoot(GNode root)
-            {
-                if (root.VisioShape == null) return;
-                double rootSize = subtreeCrossSizes.GetValueOrDefault(root, GetCrossSize(root));
-                PlaceTree(root, currentRootCross + rootSize / 2, 0);
-                currentRootCross += rootSize + crossSpacing;
-            }
-
             void PlaceTree(GNode node, double crossCenter, double mainPos)
             {
                 if (processed.Contains(node) || node.VisioShape == null) return;
@@ -225,14 +217,30 @@ namespace md2visio.vsdx
                 }
             }
 
-            foreach (var root in roots)
+            static double PlaceRoot(
+                GNode root,
+                double currentRootCross,
+                double crossSpacing,
+                Dictionary<GNode, double> subtreeCrossSizes,
+                Func<GNode, double> getCrossSize,
+                Action<GNode, double, double> placeTree)
             {
-                PlaceRoot(root);
+                if (root.VisioShape == null) return currentRootCross;
+
+                double rootSize = subtreeCrossSizes.GetValueOrDefault(root, getCrossSize(root));
+                placeTree(root, currentRootCross + rootSize / 2, 0);
+                return currentRootCross + rootSize + crossSpacing;
             }
 
+            foreach (var root in roots)
+            {
+                currentRootCross = PlaceRoot(root, currentRootCross, crossSpacing, subtreeCrossSizes, GetCrossSize, PlaceTree);
+            }
+
+            // Place any nodes not reached from roots (cycles or disconnected components).
             foreach (var root in sortedNodes.Where(n => !processed.Contains(n)).OrderBy(n => n.ID))
             {
-                PlaceRoot(root);
+                currentRootCross = PlaceRoot(root, currentRootCross, crossSpacing, subtreeCrossSizes, GetCrossSize, PlaceTree);
             }
         }
 
@@ -332,6 +340,7 @@ namespace md2visio.vsdx
 
         double ResolveSpacing(string configPath, double fallback)
         {
+            // Convert config spacing (px) to Visio internal inches via mm; fallback when missing/invalid.
             if (!config.GetDouble(configPath, out double spacing)) return fallback;
             if (spacing <= 0) return fallback;
 
