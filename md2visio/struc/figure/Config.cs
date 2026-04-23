@@ -39,6 +39,11 @@
             return UserFrontMatter.LoadYaml(frontMatter);
         }
 
+        public bool GetBool(string keyPath, out bool b)
+        {
+            return GetUserBool(keyPath, out b)
+                || UpdateDefaults().GetBool(keyPath, out b);
+        }
         public bool GetDouble(string keyPath, out double d)
         {
             return GetUserDouble(keyPath, out d)
@@ -66,6 +71,11 @@
             return serial;
         }
 
+        bool GetUserBool(string keyPath, out bool b)
+        {
+            if (userDirective.GetBool(keyPath, out b)) return true;
+            return userFrontMatter.GetBool(keyPath, out b);
+        }
         bool GetUserString(string keyPath, out string s)
         {
             if (userDirective.GetString(keyPath, out s)) return true;

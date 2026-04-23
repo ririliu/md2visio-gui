@@ -15,6 +15,7 @@ namespace md2visio.vsdx
     internal class VDrawerG : VFigureDrawer<Graph>
     {
         const double GraphMinTextRate = 0.4;
+        const double MmPerInch = 25.4;
         LinkedList<GNode> drawnList = new LinkedList<GNode>();
         HashSet<GNode> drawnSet = new HashSet<GNode>();
 
@@ -27,6 +28,7 @@ namespace md2visio.vsdx
             PauseForViewing(300); // 给用户时间看到初始状态
             
             DrawNodes(figure);
+            NormalizePositions(ResolveSpacing("config.flowchart.diagramPadding", GNode.SPACE));
             PauseForViewing(500); // 节点绘制完成后暂停
             
             DrawEdges(figure);
@@ -35,6 +37,11 @@ namespace md2visio.vsdx
 
         void DrawNodes(Graph graph)
         {
+            if (TryDrawWithMermaidLayout(graph))
+            {
+                return;
+            }
+
             foreach (GSubgraph subGraph in graph.Subgraphs)
             {
                 DrawNodes(subGraph);
@@ -69,6 +76,99 @@ namespace md2visio.vsdx
             }        
         }
 
+        bool TryDrawWithMermaidLayout(Graph graph)
+        {
+            if (graph.Parent != null)
+            {
+                return false;
+            }
+
+            GraphLayout? layout = EnsureLayout(graph);
+            if (layout == null)
+            {
+                return false;
+            }
+
+            var nodes = graph.NodeDict.Values.OfType<GNode>()
+                .Where(node => node is not GBorderNode)
+                .ToList();
+
+            if (nodes.Count == 0)
+            {
+                return false;
+            }
+
+            if (!layout.CoversNodes(nodes))
+            {
+                _context.LogWarning("Mermaid CLI 布局缺少部分节点坐标，回退到 BFS 布局。");
+                return false;
+            }
+
+            DrawNodesWithLayout(nodes, layout);
+            DrawSubgraphBordersWithLayout(graph, layout);
+            return true;
+        }
+
+        GraphLayout? EnsureLayout(Graph graph)
+        {
+            var layout = graph.ResolveLayout();
+            if (layout != null) return layout;
+
+            if (string.IsNullOrWhiteSpace(graph.MermaidSource))
+            {
+                return null;
+            }
+
+            var runner = new MermaidLayoutRunner(config, _context);
+            layout = runner.TryGetLayout(graph.MermaidSource);
+            if (layout != null)
+            {
+                graph.Layout = layout;
+            }
+            return layout;
+        }
+
+        void DrawNodesWithLayout(List<GNode> nodes, GraphLayout layout)
+        {
+            foreach (var node in nodes.OrderBy(n => n.ID))
+            {
+                if (node is GBorderNode) continue;
+
+                Shape shape = CreateShape(node);
+                SetFillForegnd(shape, "config.themeVariables.primaryColor");
+                SetLineColor(shape, "config.themeVariables.primaryBorderColor");
+                SetTextColor(shape, "config.themeVariables.primaryTextColor");
+                shape.CellsU["LineWeight"].FormulaU = "0.75 pt";
+                PostProcessShape(node, shape);
+
+                if (layout.TryGetNode(node, out var layoutNode))
+                {
+                    ApplyLayoutSize(shape, layoutNode);
+                    MoveTo(shape, LayoutToInches(layoutNode.X), LayoutToVisioY(layoutNode.Y));
+                }
+
+                drawnList.AddLast(node);
+                drawnSet.Add(node);
+                PauseForViewing(100);
+            }
+        }
+
+        void DrawSubgraphBordersWithLayout(Graph graph, GraphLayout layout)
+        {
+            foreach (GSubgraph subGraph in graph.Subgraphs)
+            {
+                DrawSubgraphBordersWithLayout(subGraph, layout);
+                if (layout.TryGetSubgraph(subGraph, out var layoutNode))
+                {
+                    DrawSubgraphBorder(subGraph, layoutNode);
+                }
+                else
+                {
+                    DrawSubgraphBorder(subGraph, null);
+                }
+            }
+        }
+
         List<GNode> SortNodesBFS(LinkedList<GNode> nodes)
         {
             var nodeSet = new HashSet<GNode>(nodes);
@@ -76,7 +176,7 @@ namespace md2visio.vsdx
             var visited = new HashSet<GNode>();
             var queue = new Queue<GNode>();
 
-            foreach (var startNode in nodes)
+            foreach (var startNode in nodes.OrderBy(n => n.ID))
             {
                 if (!nodeSet.Contains(startNode) || visited.Contains(startNode)) continue;
 
@@ -88,7 +188,7 @@ namespace md2visio.vsdx
                     var n = queue.Dequeue();
                     sorted.Add(n);
 
-                    foreach (var child in n.OutputNodes())
+                    foreach (var child in n.OutputNodes().OrderBy(c => c.ID))
                     {
                         if (nodeSet.Contains(child) && !visited.Contains(child))
                         {
@@ -105,6 +205,8 @@ namespace md2visio.vsdx
         {
             if (nodes.Count == 0) return;
 
+            double crossSpacing = ResolveSpacing("config.flowchart.nodeSpacing", GNode.SPACE);
+            double mainSpacing = ResolveSpacing("config.flowchart.rankSpacing", GNode.SPACE);
             var sortedNodes = SortNodesBFS(nodes);
 
             // 1. 创建所有形状
@@ -148,14 +250,17 @@ namespace md2visio.vsdx
                 else
                 {
                     double childrenSize = children.Sum(c => subtreeCrossSizes.GetValueOrDefault(c, GetCrossSize(c)))
-                                        + (children.Count - 1) * GNode.SPACE;
+                                        + (children.Count - 1) * crossSpacing;
                     subtreeCrossSizes[node] = Math.Max(selfSize, childrenSize);
                 }
             }
 
             // 3. 布局（预序遍历）
             var processed = new HashSet<GNode>();
-            var roots = sortedNodes.Where(n => !n.InputNodes().Any(p => sortedNodes.Contains(p))).ToList();
+            var roots = sortedNodes
+                .Where(n => !n.InputNodes().Any(p => sortedNodes.Contains(p)))
+                .OrderBy(n => n.ID)
+                .ToList();
             double currentRootCross = 0;
 
             void PlaceTree(GNode node, double crossCenter, double mainPos)
@@ -183,12 +288,13 @@ namespace md2visio.vsdx
                 // 处理子节点
                 var children = node.OutputNodes()
                     .Where(c => sortedNodes.Contains(c) && c.VisioShape != null && !processed.Contains(c))
+                    .OrderBy(c => c.ID)
                     .ToList();
 
                 if (children.Count == 0) return;
 
                 double childrenTotalCross = children.Sum(c => subtreeCrossSizes.GetValueOrDefault(c, GetCrossSize(c)))
-                                          + (children.Count - 1) * GNode.SPACE;
+                                          + (children.Count - 1) * crossSpacing;
 
                 double startChildCross = crossCenter - childrenTotalCross / 2;
 
@@ -199,22 +305,40 @@ namespace md2visio.vsdx
 
                     double selfMain = GetMainSize(node);
                     double childMain = GetMainSize(child);
-                    double dist = selfMain / 2 + GNode.SPACE + childMain / 2;
+                    double dist = selfMain / 2 + mainSpacing + childMain / 2;
 
                     // 按生长方向计算下一层位置
                     double nextMain = mainPos + (isVertical ? direct.V : direct.H) * dist;
 
                     PlaceTree(child, childCenter, nextMain);
-                    startChildCross += childCrossW + GNode.SPACE;
+                    startChildCross += childCrossW + crossSpacing;
                 }
+            }
+
+            static double PlaceRoot(
+                GNode root,
+                double currentRootCross,
+                double crossSpacing,
+                Dictionary<GNode, double> subtreeCrossSizes,
+                Func<GNode, double> getCrossSize,
+                Action<GNode, double, double> placeTree)
+            {
+                if (root.VisioShape == null) return currentRootCross;
+
+                double rootSize = subtreeCrossSizes.GetValueOrDefault(root, getCrossSize(root));
+                placeTree(root, currentRootCross + rootSize / 2, 0);
+                return currentRootCross + rootSize + crossSpacing;
             }
 
             foreach (var root in roots)
             {
-                if (root.VisioShape == null) continue;
-                double rootSize = subtreeCrossSizes.GetValueOrDefault(root, GetCrossSize(root));
-                PlaceTree(root, currentRootCross + rootSize / 2, 0);
-                currentRootCross += rootSize + GNode.SPACE;
+                currentRootCross = PlaceRoot(root, currentRootCross, crossSpacing, subtreeCrossSizes, GetCrossSize, PlaceTree);
+            }
+
+            // Place any nodes not reached from roots (cycles or disconnected components).
+            foreach (var root in sortedNodes.Where(n => !processed.Contains(n)).OrderBy(n => n.ID))
+            {
+                currentRootCross = PlaceRoot(root, currentRootCross, crossSpacing, subtreeCrossSizes, GetCrossSize, PlaceTree);
             }
         }
 
@@ -243,7 +367,12 @@ namespace md2visio.vsdx
 
         GNode DrawSubgraphBorder(GSubgraph subGraph)
         {
-            GNode borderNode = DropSubgraphBorder(subGraph);
+            return DrawSubgraphBorder(subGraph, null);
+        }
+
+        GNode DrawSubgraphBorder(GSubgraph subGraph, LayoutNode? layout)
+        {
+            GNode borderNode = DropSubgraphBorder(subGraph, layout);
             drawnList.AddLast(borderNode);
             drawnSet.Add(borderNode);
 
@@ -266,8 +395,9 @@ namespace md2visio.vsdx
             if(direct.H != 0)
             {
                 double moveH = 0, moveV = relativeBound.PinY-nodesBound.PinY;
-                if (drawAtTail) moveH = relativeBound.Right + GNode.SPACE - nodesBound.Left;
-                else moveH = relativeBound.Left - GNode.SPACE - nodesBound.Right;
+                double spacing = ResolveSpacing("config.flowchart.rankSpacing", GNode.SPACE);
+                if (drawAtTail) moveH = relativeBound.Right + spacing - nodesBound.Left;
+                else moveH = relativeBound.Left - spacing - nodesBound.Right;
 
                 foreach (GNode node in nodes) 
                 {
@@ -279,8 +409,9 @@ namespace md2visio.vsdx
             if(direct.V != 0)
             {
                 double moveV = 0, moveH = relativeBound.PinX - nodesBound.PinX;
-                if (drawAtTail) moveV = relativeBound.Top + GNode.SPACE - nodesBound.Bottom;
-                else moveV = relativeBound.Bottom - GNode.SPACE - nodesBound.Top;
+                double spacing = ResolveSpacing("config.flowchart.rankSpacing", GNode.SPACE);
+                if (drawAtTail) moveV = relativeBound.Top + spacing - nodesBound.Bottom;
+                else moveV = relativeBound.Bottom - spacing - nodesBound.Top;
 
                 foreach (GNode node in nodes)
                 {
@@ -291,6 +422,62 @@ namespace md2visio.vsdx
             }
 
             return newBound;
+        }
+
+        void NormalizePositions(double padding)
+        {
+            if (drawnList.Count == 0) return;
+
+            VBoundary boundary = NodesBoundary(drawnList.ToList());
+            if (boundary.Width == 0 && boundary.Height == 0) return;
+
+            double shiftX = padding - boundary.Left;
+            double shiftY = padding - boundary.Bottom;
+
+            foreach (GNode node in drawnList)
+            {
+                if (node.VisioShape == null) continue;
+                MoveTo(node.VisioShape, PinX(node.VisioShape) + shiftX, PinY(node.VisioShape) + shiftY);
+            }
+        }
+
+        double ResolveSpacing(string configPath, double fallback)
+        {
+            // Convert config spacing (px) to Visio internal inches via mm; fallback when missing/invalid.
+            if (!config.GetDouble(configPath, out double spacing)) return fallback;
+            if (spacing <= 0) return fallback;
+
+            double mm = spacing * Pix2MM();
+            if (mm <= 0) return fallback;
+            return mm / MmPerInch;
+        }
+
+        double LayoutToInches(double layoutPx)
+        {
+            double mm = layoutPx * Pix2MM();
+            if (mm <= 0) return 0;
+            return mm / MmPerInch;
+        }
+
+        double LayoutToVisioY(double layoutPx)
+        {
+            return -LayoutToInches(layoutPx);
+        }
+
+        void ApplyLayoutSize(Shape shape, LayoutNode layoutNode)
+        {
+            if (layoutNode.Width <= 0 || layoutNode.Height <= 0) return;
+
+            double layoutWidth = LayoutToInches(layoutNode.Width);
+            double layoutHeight = LayoutToInches(layoutNode.Height);
+            if (layoutWidth > 0 && layoutWidth > Width(shape))
+            {
+                shape.CellsU["Width"].FormulaU = layoutWidth.ToString();
+            }
+            if (layoutHeight > 0 && layoutHeight > Height(shape))
+            {
+                shape.CellsU["Height"].FormulaU = layoutHeight.ToString();
+            }
         }
 
         bool IsDrawAtTail(List<GNode> nodes, GrowthDirection direct)
@@ -327,17 +514,31 @@ namespace md2visio.vsdx
             return ShapeSheetIU(node.VisioShape, propName);
         }
 
-        public GNode DropSubgraphBorder(GSubgraph gSubgraph)
+        public GNode DropSubgraphBorder(GSubgraph gSubgraph, LayoutNode? layout = null)
         {
             if (gSubgraph.Parent == null) throw new SynException("expected parent of subgraph");
 
             GNode node = gSubgraph.BorderNode; 
             VBoundary bnd = SubgraphBoundary(gSubgraph);
             Shape shape = CreateShape(node);
-            shape.CellsU["Width"].FormulaU = (bnd.Width + GNode.SPACE * 2).ToString();
-            shape.CellsU["Height"].FormulaU = (bnd.Height + GNode.SPACE * 2).ToString();
-            shape.CellsU["PinX"].FormulaU = bnd.PinX.ToString();
-            shape.CellsU["PinY"].FormulaU = bnd.PinY.ToString();
+            double padding = ResolveSpacing("config.flowchart.padding", GNode.PADDING);
+            double width = bnd.Width + padding * 2;
+            double height = bnd.Height + padding * 2;
+            double pinX = bnd.PinX;
+            double pinY = bnd.PinY;
+
+            if (layout.HasValue && layout.Value.Width > 0 && layout.Value.Height > 0)
+            {
+                width = Math.Max(width, LayoutToInches(layout.Value.Width));
+                height = Math.Max(height, LayoutToInches(layout.Value.Height));
+                pinX = LayoutToInches(layout.Value.X);
+                pinY = LayoutToVisioY(layout.Value.Y);
+            }
+
+            shape.CellsU["Width"].FormulaU = width.ToString();
+            shape.CellsU["Height"].FormulaU = height.ToString();
+            shape.CellsU["PinX"].FormulaU = pinX.ToString();
+            shape.CellsU["PinY"].FormulaU = pinY.ToString();
             shape.CellsU["FillPattern"].FormulaU = "0";
             shape.CellsU["VerticalAlign"].FormulaU = "0";
             shape.Text = gSubgraph.Label;

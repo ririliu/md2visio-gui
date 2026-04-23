@@ -11,11 +11,30 @@ namespace md2visio.struc.graph
         Dictionary<string, GSubgraph> subgraphDict = new Dictionary<string, GSubgraph>();
         protected LinkedList<GNode> alignedInnerNodes = new LinkedList<GNode>();
         protected LinkedList<GNode> alignedGroupedNodes = new LinkedList<GNode>();
+        private GraphLayout? layout;
 
         public List<GSubgraph> Subgraphs { get { return subgraphDict.Values.ToList(); } }
+        public string MermaidSource { get; set; } = string.Empty;
 
         public Graph()
         {
+        }
+
+        public GraphLayout? Layout
+        {
+            get => layout;
+            set => layout = value;
+        }
+
+        public GraphLayout? ResolveLayout()
+        {
+            if (layout != null) return layout;
+            if (Parent is Graph parentGraph)
+            {
+                return parentGraph.ResolveLayout();
+            }
+
+            return null;
         }
 
         public LinkedList<GNode> AlignInnerNodes()

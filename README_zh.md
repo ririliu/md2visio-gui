@@ -103,6 +103,16 @@ graph LR
 *   .NET 8.0 SDK
 *   Microsoft Visio
 
+### 可选：Mermaid CLI 布局（流程图）
+
+如需使用 Mermaid 的 dagre/elk 布局坐标（替代内置 BFS 布局），请安装 Mermaid CLI 并开启配置：
+
+*   安装 CLI：`npm install -g @mermaid-js/mermaid-cli`
+*   启用配置：
+    * `config.flowchart.useMermaidLayout: true`
+    * `config.flowchart.layoutCli: mmdc`（或绝对路径）
+*   可选：设置 `config.layout: elk` 切换布局引擎
+
 **项目结构**:
 ```
 md2visio/          # 核心逻辑库
@@ -140,4 +150,3 @@ MIT License
 ## ⭐ Star 趋势
 
 [![Star History Chart](https://api.star-history.com/svg?repos=konbakuyomu/md2visio-gui&type=date&legend=top-left)](https://www.star-history.com/#konbakuyomu/md2visio-gui&type=date&legend=top-left)
-
