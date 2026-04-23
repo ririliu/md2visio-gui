@@ -15,6 +15,7 @@ namespace md2visio.vsdx
     internal class VDrawerG : VFigureDrawer<Graph>
     {
         const double GraphMinTextRate = 0.4;
+        const double MmPerInch = 25.4;
         LinkedList<GNode> drawnList = new LinkedList<GNode>();
         HashSet<GNode> drawnSet = new HashSet<GNode>();
 
@@ -164,6 +165,14 @@ namespace md2visio.vsdx
                 .ToList();
             double currentRootCross = 0;
 
+            void PlaceRoot(GNode root)
+            {
+                if (root.VisioShape == null) return;
+                double rootSize = subtreeCrossSizes.GetValueOrDefault(root, GetCrossSize(root));
+                PlaceTree(root, currentRootCross + rootSize / 2, 0);
+                currentRootCross += rootSize + crossSpacing;
+            }
+
             void PlaceTree(GNode node, double crossCenter, double mainPos)
             {
                 if (processed.Contains(node) || node.VisioShape == null) return;
@@ -218,18 +227,12 @@ namespace md2visio.vsdx
 
             foreach (var root in roots)
             {
-                if (root.VisioShape == null) continue;
-                double rootSize = subtreeCrossSizes.GetValueOrDefault(root, GetCrossSize(root));
-                PlaceTree(root, currentRootCross + rootSize / 2, 0);
-                currentRootCross += rootSize + crossSpacing;
+                PlaceRoot(root);
             }
 
             foreach (var root in sortedNodes.Where(n => !processed.Contains(n)).OrderBy(n => n.ID))
             {
-                if (root.VisioShape == null) continue;
-                double rootSize = subtreeCrossSizes.GetValueOrDefault(root, GetCrossSize(root));
-                PlaceTree(root, currentRootCross + rootSize / 2, 0);
-                currentRootCross += rootSize + crossSpacing;
+                PlaceRoot(root);
             }
         }
 
@@ -334,7 +337,7 @@ namespace md2visio.vsdx
 
             double mm = spacing * Pix2MM();
             if (mm <= 0) return fallback;
-            return mm / 25.4;
+            return mm / MmPerInch;
         }
 
         bool IsDrawAtTail(List<GNode> nodes, GrowthDirection direct)
