@@ -101,6 +101,16 @@ A single `.md` file can contain multiple Mermaid diagrams - each will be convert
 *   .NET 8.0 SDK
 *   Microsoft Visio
 
+### Optional Mermaid CLI Layout (flowchart)
+
+To use Mermaid's dagre/elk layout coordinates (instead of the built-in BFS layout), install Mermaid CLI and enable the config switch:
+
+*   Install CLI: `npm install -g @mermaid-js/mermaid-cli`
+*   Enable config:
+    * `config.flowchart.useMermaidLayout: true`
+    * `config.flowchart.layoutCli: mmdc` (or an absolute path)
+*   Optional: set `config.layout: elk` to switch the layout engine
+
 **Project Structure**:
 ```
 md2visio/          # Core library

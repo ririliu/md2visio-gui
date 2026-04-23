@@ -14,6 +14,7 @@ namespace md2visio.struc.graph
         Stack<Graph> stack = new Stack<Graph>();
         List<GNode> fromNodes = EmptyList, toNodes = EmptyList;
         GEdge edge = Empty.Get<GEdge>();
+        int mermaidBlockIndex = -1;
 
         public GBuilder(SttIterator iter, ConversionContext context, IVisioSession session)
             : base(iter, context, session)
@@ -25,7 +26,17 @@ namespace md2visio.struc.graph
             while (iter.HasNext())
             {
                 SynState cur = iter.Next();
-                if (cur is SttMermaidStart) stack.Clear();
+                if (cur is SttMermaidStart)
+                {
+                    stack.Clear();
+                    mermaidBlockIndex++;
+                    var block = MermaidBlockExtractor.TryGetBlock(iter.Context.InputFile, mermaidBlockIndex);
+                    graph.MermaidSource = block ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(block))
+                    {
+                        _context.LogWarning($"未找到 Mermaid 代码块内容，布局结果将跳过 (index={mermaidBlockIndex})");
+                    }
+                }
                 else if (cur is SttMermaidClose) { Output(outputFile); break; }
                 else if (cur is GSttKeyword) BuildKeyword();
                 else if (cur is GSttText)

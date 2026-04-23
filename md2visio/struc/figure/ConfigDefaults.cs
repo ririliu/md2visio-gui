@@ -21,6 +21,12 @@ namespace md2visio.struc.figure
             LoadCommonConfig();            
         }
 
+        public bool GetBool(string keyPath, out bool b)
+        {
+            return LoadThemeVars(Theme, DarkMode).GetBool(keyPath, out b)
+                || LoadFigureConfig(Figure).GetBool(keyPath, out b)
+                || LoadCommonConfig().GetBool(keyPath, out b);
+        }
         public bool GetDouble(string keyPath, out double d)
         {
             return LoadThemeVars(Theme, DarkMode).GetDouble(keyPath, out d)

@@ -37,6 +37,11 @@ namespace md2visio.vsdx
 
         void DrawNodes(Graph graph)
         {
+            if (TryDrawWithMermaidLayout(graph))
+            {
+                return;
+            }
+
             foreach (GSubgraph subGraph in graph.Subgraphs)
             {
                 DrawNodes(subGraph);
@@ -69,6 +74,99 @@ namespace md2visio.vsdx
                 DrawSubgraphBorder(subgraph);
                 Relocate(subgraph);
             }        
+        }
+
+        bool TryDrawWithMermaidLayout(Graph graph)
+        {
+            if (graph.Parent != null)
+            {
+                return false;
+            }
+
+            GraphLayout? layout = EnsureLayout(graph);
+            if (layout == null)
+            {
+                return false;
+            }
+
+            var nodes = graph.NodeDict.Values.OfType<GNode>()
+                .Where(node => node is not GBorderNode)
+                .ToList();
+
+            if (nodes.Count == 0)
+            {
+                return false;
+            }
+
+            if (!layout.CoversNodes(nodes))
+            {
+                _context.LogWarning("Mermaid CLI 布局缺少部分节点坐标，回退到 BFS 布局。");
+                return false;
+            }
+
+            DrawNodesWithLayout(nodes, layout);
+            DrawSubgraphBordersWithLayout(graph, layout);
+            return true;
+        }
+
+        GraphLayout? EnsureLayout(Graph graph)
+        {
+            var layout = graph.ResolveLayout();
+            if (layout != null) return layout;
+
+            if (string.IsNullOrWhiteSpace(graph.MermaidSource))
+            {
+                return null;
+            }
+
+            var runner = new MermaidLayoutRunner(config, _context);
+            layout = runner.TryGetLayout(graph.MermaidSource);
+            if (layout != null)
+            {
+                graph.Layout = layout;
+            }
+            return layout;
+        }
+
+        void DrawNodesWithLayout(List<GNode> nodes, GraphLayout layout)
+        {
+            foreach (var node in nodes.OrderBy(n => n.ID))
+            {
+                if (node is GBorderNode) continue;
+
+                Shape shape = CreateShape(node);
+                SetFillForegnd(shape, "config.themeVariables.primaryColor");
+                SetLineColor(shape, "config.themeVariables.primaryBorderColor");
+                SetTextColor(shape, "config.themeVariables.primaryTextColor");
+                shape.CellsU["LineWeight"].FormulaU = "0.75 pt";
+                PostProcessShape(node, shape);
+
+                if (layout.TryGetNode(node, out var layoutNode))
+                {
+                    ApplyLayoutSize(shape, layoutNode);
+                    MoveTo(shape, LayoutToInches(layoutNode.X), LayoutToVisioY(layoutNode.Y));
+                }
+
+                drawnList.AddLast(node);
+                drawnSet.Add(node);
+                PauseForViewing(100);
+            }
+        }
+
+        void DrawSubgraphBordersWithLayout(Graph graph, GraphLayout layout)
+        {
+            foreach (GSubgraph subGraph in graph.Subgraphs)
+            {
+                DrawSubgraphBordersWithLayout(subGraph, layout);
+                if (layout.TryGetSubgraph(subGraph, out var layoutNode))
+                {
+                    DrawSubgraphBorder(subGraph, layoutNode);
+                }
+                else
+                {
+                    DrawSubgraphBorder(subGraph, null);
+                }
+            }
         }
 
         List<GNode> SortNodesBFS(LinkedList<GNode> nodes)
@@ -269,7 +367,12 @@ namespace md2visio.vsdx
 
         GNode DrawSubgraphBorder(GSubgraph subGraph)
         {
-            GNode borderNode = DropSubgraphBorder(subGraph);
+            return DrawSubgraphBorder(subGraph, null);
+        }
+
+        GNode DrawSubgraphBorder(GSubgraph subGraph, LayoutNode? layout)
+        {
+            GNode borderNode = DropSubgraphBorder(subGraph, layout);
             drawnList.AddLast(borderNode);
             drawnSet.Add(borderNode);
 
@@ -349,6 +452,34 @@ namespace md2visio.vsdx
             return mm / MmPerInch;
         }
 
+        double LayoutToInches(double layoutPx)
+        {
+            double mm = layoutPx * Pix2MM();
+            if (mm <= 0) return 0;
+            return mm / MmPerInch;
+        }
+
+        double LayoutToVisioY(double layoutPx)
+        {
+            return -LayoutToInches(layoutPx);
+        }
+
+        void ApplyLayoutSize(Shape shape, LayoutNode layoutNode)
+        {
+            if (layoutNode.Width <= 0 || layoutNode.Height <= 0) return;
+
+            double layoutWidth = LayoutToInches(layoutNode.Width);
+            double layoutHeight = LayoutToInches(layoutNode.Height);
+            if (layoutWidth > 0 && layoutWidth > Width(shape))
+            {
+                shape.CellsU["Width"].FormulaU = layoutWidth.ToString();
+            }
+            if (layoutHeight > 0 && layoutHeight > Height(shape))
+            {
+                shape.CellsU["Height"].FormulaU = layoutHeight.ToString();
+            }
+        }
+
         bool IsDrawAtTail(List<GNode> nodes, GrowthDirection direct)
         {
             int nOut = 0, nIn = 0;
@@ -383,17 +514,31 @@ namespace md2visio.vsdx
             return ShapeSheetIU(node.VisioShape, propName);
         }
 
-        public GNode DropSubgraphBorder(GSubgraph gSubgraph)
+        public GNode DropSubgraphBorder(GSubgraph gSubgraph, LayoutNode? layout = null)
         {
             if (gSubgraph.Parent == null) throw new SynException("expected parent of subgraph");
 
             GNode node = gSubgraph.BorderNode; 
             VBoundary bnd = SubgraphBoundary(gSubgraph);
             Shape shape = CreateShape(node);
-            shape.CellsU["Width"].FormulaU = (bnd.Width + GNode.SPACE * 2).ToString();
-            shape.CellsU["Height"].FormulaU = (bnd.Height + GNode.SPACE * 2).ToString();
-            shape.CellsU["PinX"].FormulaU = bnd.PinX.ToString();
-            shape.CellsU["PinY"].FormulaU = bnd.PinY.ToString();
+            double padding = ResolveSpacing("config.flowchart.padding", GNode.PADDING);
+            double width = bnd.Width + padding * 2;
+            double height = bnd.Height + padding * 2;
+            double pinX = bnd.PinX;
+            double pinY = bnd.PinY;
+
+            if (layout.HasValue && layout.Value.Width > 0 && layout.Value.Height > 0)
+            {
+                width = Math.Max(width, LayoutToInches(layout.Value.Width));
+                height = Math.Max(height, LayoutToInches(layout.Value.Height));
+                pinX = LayoutToInches(layout.Value.X);
+                pinY = LayoutToVisioY(layout.Value.Y);
+            }
+
+            shape.CellsU["Width"].FormulaU = width.ToString();
+            shape.CellsU["Height"].FormulaU = height.ToString();
+            shape.CellsU["PinX"].FormulaU = pinX.ToString();
+            shape.CellsU["PinY"].FormulaU = pinY.ToString();
             shape.CellsU["FillPattern"].FormulaU = "0";
             shape.CellsU["VerticalAlign"].FormulaU = "0";
             shape.Text = gSubgraph.Label;
