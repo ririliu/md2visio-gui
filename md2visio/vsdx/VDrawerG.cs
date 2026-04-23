@@ -27,6 +27,7 @@ namespace md2visio.vsdx
             PauseForViewing(300); // 给用户时间看到初始状态
             
             DrawNodes(figure);
+            NormalizePositions(ResolveSpacing("config.flowchart.diagramPadding", GNode.SPACE));
             PauseForViewing(500); // 节点绘制完成后暂停
             
             DrawEdges(figure);
@@ -76,7 +77,7 @@ namespace md2visio.vsdx
             var visited = new HashSet<GNode>();
             var queue = new Queue<GNode>();
 
-            foreach (var startNode in nodes)
+            foreach (var startNode in nodes.OrderBy(n => n.ID))
             {
                 if (!nodeSet.Contains(startNode) || visited.Contains(startNode)) continue;
 
@@ -88,7 +89,7 @@ namespace md2visio.vsdx
                     var n = queue.Dequeue();
                     sorted.Add(n);
 
-                    foreach (var child in n.OutputNodes())
+                    foreach (var child in n.OutputNodes().OrderBy(c => c.ID))
                     {
                         if (nodeSet.Contains(child) && !visited.Contains(child))
                         {
@@ -105,6 +106,8 @@ namespace md2visio.vsdx
         {
             if (nodes.Count == 0) return;
 
+            double crossSpacing = ResolveSpacing("config.flowchart.nodeSpacing", GNode.SPACE);
+            double mainSpacing = ResolveSpacing("config.flowchart.rankSpacing", GNode.SPACE);
             var sortedNodes = SortNodesBFS(nodes);
 
             // 1. 创建所有形状
@@ -148,14 +151,17 @@ namespace md2visio.vsdx
                 else
                 {
                     double childrenSize = children.Sum(c => subtreeCrossSizes.GetValueOrDefault(c, GetCrossSize(c)))
-                                        + (children.Count - 1) * GNode.SPACE;
+                                        + (children.Count - 1) * crossSpacing;
                     subtreeCrossSizes[node] = Math.Max(selfSize, childrenSize);
                 }
             }
 
             // 3. 布局（预序遍历）
             var processed = new HashSet<GNode>();
-            var roots = sortedNodes.Where(n => !n.InputNodes().Any(p => sortedNodes.Contains(p))).ToList();
+            var roots = sortedNodes
+                .Where(n => !n.InputNodes().Any(p => sortedNodes.Contains(p)))
+                .OrderBy(n => n.ID)
+                .ToList();
             double currentRootCross = 0;
 
             void PlaceTree(GNode node, double crossCenter, double mainPos)
@@ -183,12 +189,13 @@ namespace md2visio.vsdx
                 // 处理子节点
                 var children = node.OutputNodes()
                     .Where(c => sortedNodes.Contains(c) && c.VisioShape != null && !processed.Contains(c))
+                    .OrderBy(c => c.ID)
                     .ToList();
 
                 if (children.Count == 0) return;
 
                 double childrenTotalCross = children.Sum(c => subtreeCrossSizes.GetValueOrDefault(c, GetCrossSize(c)))
-                                          + (children.Count - 1) * GNode.SPACE;
+                                          + (children.Count - 1) * crossSpacing;
 
                 double startChildCross = crossCenter - childrenTotalCross / 2;
 
@@ -199,13 +206,13 @@ namespace md2visio.vsdx
 
                     double selfMain = GetMainSize(node);
                     double childMain = GetMainSize(child);
-                    double dist = selfMain / 2 + GNode.SPACE + childMain / 2;
+                    double dist = selfMain / 2 + mainSpacing + childMain / 2;
 
                     // 按生长方向计算下一层位置
                     double nextMain = mainPos + (isVertical ? direct.V : direct.H) * dist;
 
                     PlaceTree(child, childCenter, nextMain);
-                    startChildCross += childCrossW + GNode.SPACE;
+                    startChildCross += childCrossW + crossSpacing;
                 }
             }
 
@@ -214,7 +221,15 @@ namespace md2visio.vsdx
                 if (root.VisioShape == null) continue;
                 double rootSize = subtreeCrossSizes.GetValueOrDefault(root, GetCrossSize(root));
                 PlaceTree(root, currentRootCross + rootSize / 2, 0);
-                currentRootCross += rootSize + GNode.SPACE;
+                currentRootCross += rootSize + crossSpacing;
+            }
+
+            foreach (var root in sortedNodes.Where(n => !processed.Contains(n)).OrderBy(n => n.ID))
+            {
+                if (root.VisioShape == null) continue;
+                double rootSize = subtreeCrossSizes.GetValueOrDefault(root, GetCrossSize(root));
+                PlaceTree(root, currentRootCross + rootSize / 2, 0);
+                currentRootCross += rootSize + crossSpacing;
             }
         }
 
@@ -266,8 +281,9 @@ namespace md2visio.vsdx
             if(direct.H != 0)
             {
                 double moveH = 0, moveV = relativeBound.PinY-nodesBound.PinY;
-                if (drawAtTail) moveH = relativeBound.Right + GNode.SPACE - nodesBound.Left;
-                else moveH = relativeBound.Left - GNode.SPACE - nodesBound.Right;
+                double spacing = ResolveSpacing("config.flowchart.rankSpacing", GNode.SPACE);
+                if (drawAtTail) moveH = relativeBound.Right + spacing - nodesBound.Left;
+                else moveH = relativeBound.Left - spacing - nodesBound.Right;
 
                 foreach (GNode node in nodes) 
                 {
@@ -279,8 +295,9 @@ namespace md2visio.vsdx
             if(direct.V != 0)
             {
                 double moveV = 0, moveH = relativeBound.PinX - nodesBound.PinX;
-                if (drawAtTail) moveV = relativeBound.Top + GNode.SPACE - nodesBound.Bottom;
-                else moveV = relativeBound.Bottom - GNode.SPACE - nodesBound.Top;
+                double spacing = ResolveSpacing("config.flowchart.rankSpacing", GNode.SPACE);
+                if (drawAtTail) moveV = relativeBound.Top + spacing - nodesBound.Bottom;
+                else moveV = relativeBound.Bottom - spacing - nodesBound.Top;
 
                 foreach (GNode node in nodes)
                 {
@@ -291,6 +308,33 @@ namespace md2visio.vsdx
             }
 
             return newBound;
+        }
+
+        void NormalizePositions(double padding)
+        {
+            if (drawnList.Count == 0) return;
+
+            VBoundary boundary = NodesBoundary(drawnList.ToList());
+            if (boundary.Width == 0 && boundary.Height == 0) return;
+
+            double shiftX = padding - boundary.Left;
+            double shiftY = padding - boundary.Bottom;
+
+            foreach (GNode node in drawnList)
+            {
+                if (node.VisioShape == null) continue;
+                MoveTo(node.VisioShape, PinX(node.VisioShape) + shiftX, PinY(node.VisioShape) + shiftY);
+            }
+        }
+
+        double ResolveSpacing(string configPath, double fallback)
+        {
+            if (!config.GetDouble(configPath, out double spacing)) return fallback;
+            if (spacing <= 0) return fallback;
+
+            double mm = spacing * Pix2MM();
+            if (mm <= 0) return fallback;
+            return mm / 25.4;
         }
 
         bool IsDrawAtTail(List<GNode> nodes, GrowthDirection direct)
