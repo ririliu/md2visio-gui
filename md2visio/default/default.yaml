@@ -3,7 +3,7 @@ config:
   theme: default
   look: classic
   handDrawnSeed: 0
-  layout: dagre
+  layout: elk
   maxTextSize: 50000
   maxEdges: 500
   logLevel: 5
