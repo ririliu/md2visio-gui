@@ -13,6 +13,6 @@ config:
         padding: 15
         defaultRenderer: dagre-wrapper
         wrappingWidth: 200
-        useMermaidLayout: false
+        useMermaidLayout: true
         layoutCli: mmdc
         layoutTimeoutMs: 15000
