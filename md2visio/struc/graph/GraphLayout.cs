@@ -36,7 +36,11 @@ namespace md2visio.struc.graph
         {
             foreach (var node in nodes)
             {
-                if (!TryGetNode(node, out _)) return false;
+                if (!TryGetNode(node, out _))
+                {
+                    Console.WriteLine($"[WARN] Mermaid CLI 布局缺少节点坐标: id='{node.ID}', label='{node.Label}'");
+                    return false;
+                }
             }
             return true;
         }
