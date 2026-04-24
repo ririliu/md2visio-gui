@@ -32,13 +32,13 @@ namespace md2visio.struc.graph
             return false;
         }
 
-        public bool CoversNodes(IEnumerable<GNode> nodes)
+        public bool CoversNodes(IEnumerable<GNode> nodes, Action<string>? onMissing = null)
         {
             foreach (var node in nodes)
             {
                 if (!TryGetNode(node, out _))
                 {
-                    Console.WriteLine($"[WARN] Mermaid CLI 布局缺少节点坐标: id='{node.ID}', label='{node.Label}'");
+                    onMissing?.Invoke($"Mermaid CLI 布局缺少节点坐标: id='{node.ID}', label='{node.Label}'");
                     return false;
                 }
             }
