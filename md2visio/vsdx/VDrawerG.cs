@@ -1,4 +1,4 @@
-﻿using md2visio.Api;
+using md2visio.Api;
 using md2visio.mermaid.cmn;
 using md2visio.struc.figure;
 using md2visio.struc.graph;
@@ -98,7 +98,7 @@ namespace md2visio.vsdx
                 return false;
             }
 
-            if (!layout.CoversNodes(nodes))
+            if (!layout.CoversNodes(nodes, missing => _context.LogWarning(missing)))
             {
                 _context.LogWarning("Mermaid CLI 布局缺少部分节点坐标，回退到 BFS 布局。");
                 return false;
