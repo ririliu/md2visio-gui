@@ -51,7 +51,7 @@ namespace md2visio.struc.graph
             try
             {
                 File.WriteAllText(inputPath, mermaidSource, Encoding.UTF8);
-                File.WriteAllText(configPath, BuildMermaidConfigJson(), Encoding.UTF8);
+                File.WriteAllText(configPath, BuildMermaidConfigJson(), new UTF8Encoding(false));
 
                 if (!RunMermaidCli(cli, inputPath, outputPath, configPath))
                 {
