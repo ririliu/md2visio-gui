@@ -74,7 +74,14 @@ namespace md2visio.struc.graph
             }
             finally
             {
-                TryCleanup(tempDir);
+                if (_context.Debug)
+                {
+                    _context.LogInfo($"Mermaid CLI 临时目录保留: {tempDir}");
+                }
+                else
+                {
+                    TryCleanup(tempDir);
+                }
             }
         }
 
